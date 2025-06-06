@@ -3,7 +3,7 @@ import { isPlatformBrowser } from '@angular/common';
 import * as tf from '@tensorflow/tfjs';
 import * as tfvis from '@tensorflow/tfjs-vis';
 
-const csvurl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm-d5gwpY6E-NYgp95ycNmQzPvQ8fAh5MgOI7Tn_Podim_OVBjn168oWAEQVSq2w/pub?gid=971307772&single=true&output=csv";
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm-d5gwpY6E-NYgp95ycNmQzPvQ8fAh5MgOI7Tn_Podim_OVBjn168oWAEQVSq2w/pub?gid=971307772&single=true&output=csv";
 
 @Component({
   selector: 'app-root',
@@ -11,9 +11,11 @@ const csvurl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm-d5gwpY6E-NYg
   styleUrls: ['./app.component.scss']
 })
 export class AppComponent implements AfterViewInit {
-  dataset: any;
+  dataArray: any[] = [];
   isBrowser: boolean;
-  model= tf.sequential();
+  model = tf.sequential();
+  featureColumns: string[] = [];
+  labelColumn = 'Apparent_Temperature';
 
   constructor(@Inject(PLATFORM_ID) private platformId: Object) {
     this.isBrowser = isPlatformBrowser(platformId);
@@ -21,73 +23,88 @@ export class AppComponent implements AfterViewInit {
 
   ngAfterViewInit() {
     if (this.isBrowser) {
-      this.loadData();
-      this.visualizeDataset();
-      this.linearregression();
+        this.loadData();
+        this.visualizeDataset();
+        this.linearRegression();
     }
   }
 
   async loadData() {
-    this.dataset = tf.data.csv(csvurl, {
+    const dataset = tf.data.csv(CSV_URL, {
       columnConfigs: {
-        Apparent_Temperature: {
-          isLabel: true
-        },
+        [this.labelColumn]: { isLabel: true }
       }
     });
+    
+    this.dataArray = await dataset.shuffle(1000).toArray();
+    
+    if (this.dataArray.length > 0) {
+      const firstSample = this.dataArray[0];
+      this.featureColumns = Object.keys(firstSample.xs).filter(
+        name => name !== this.labelColumn
+      );
+      console.log('Feature columns:', this.featureColumns);
+    }
+    console.log(`Loaded ${this.dataArray.length} records`);
   }
 
   async visualizeDataset() {
-    const shuffledDataset = this.dataset.shuffle(1000);
-    const sampledDataset = await shuffledDataset.take(100).toArray();
-    const dataset: any[] = [];
-    const humidityDataset: any[] = [];
+    const points = this.dataArray.slice(0, 500); 
+    
+    const tempPoints = points.map(e => ({
+      x: e.xs.Temperature,
+      y: e.ys.Apparent_Temperature
+    }));
+    
+    const humidityPoints = points.map(e => ({
+      x: e.xs.Humidity,
+      y: e.ys.Apparent_Temperature
+    }));
 
-    sampledDataset.forEach((e:any) => {
-      dataset.push({ x: e.xs.Temperature, y: e.ys.Apparent_Temperature });
-      humidityDataset.push({ x: e.xs.Humidity, y: e.ys.Apparent_Temperature });
-    });
-
+    console.log('Sample tempPoints:', tempPoints.slice(0, 5));
+    
     tfvis.render.scatterplot(
-      { name: 'Temperature vs Apparent Temperature', tab: 'Charts' }, 
-      { values: dataset }, 
+      { name: 'Temp vs Apparent Temp', tab: 'Charts' }, 
+      { values: tempPoints }, 
       { xLabel: 'Temperature (C)', yLabel: 'Apparent Temperature (C)' }
     );
 
     tfvis.render.scatterplot(
-      { name: 'Humidity vs Apparent Temperature', tab: 'Charts' },
-      { values: humidityDataset },
+      { name: 'Humidity vs Apparent Temp', tab: 'Charts' },
+      { values: humidityPoints },
       { xLabel: 'Humidity (%)', yLabel: 'Apparent Temperature (C)' }
     );
   }
 
-  async linearregression() {
+  async linearRegression() {
+    if (this.dataArray.length === 0) {
+      console.log("No data available for training");
+      return;
+    }
+    
     const numberEpochs = 100;
-    const columnNames = await this.dataset.columnNames();
-    const featureColumns = columnNames.filter((name:any) => 
-      name !== 'Apparent_Temperature' && name !== 'Humidity'
-    );
-    featureColumns.push('Humidity'); 
-    const numOfFeatures = featureColumns.length;
+    const batchSize = 32;
     
-    const shuffledDataset = this.dataset.shuffle(1000);
-    const sampledDataset = await shuffledDataset.take(100).toArray();
-    
-    const features: number[][] = [];
-    const target: number[] = [];
-    
-    sampledDataset.forEach((e:any) => {
-      const row = featureColumns.map((col:any) => e.xs[col]);
-      features.push(row);
-      target.push(e.ys.Apparent_Temperature);
-    });
+    const vectorizedData = this.dataArray.map(({xs, ys}) => ({
+      xs: this.featureColumns.map(col => xs[col]),
+      ys: [ys[this.labelColumn]]
+    }));
 
-    const featuresTensor = tf.tensor2d(features, [features.length, numOfFeatures]);
-    const targetTensor = tf.tensor2d(target, [target.length, 1]);
+    const splitIndex = Math.floor(0.8 * this.dataArray.length);
+    const trainData = vectorizedData.slice(0, splitIndex);
+    const valData = vectorizedData.slice(splitIndex);
+
+    console.log(`Training on ${trainData.length} samples, validating on ${valData.length} samples`);
+    
+    const trainDataset = tf.data.array(trainData)
+      .shuffle(trainData.length)
+      .batch(batchSize);
+    
+    const valDataset = tf.data.array(valData).batch(batchSize);
 
     this.model = tf.sequential();
     this.model.add(tf.layers.dense({
-      inputShape: [numOfFeatures],
+      inputShape: [this.featureColumns.length],
       units: 1
     }));
     
@@ -97,15 +114,17 @@ export class AppComponent implements AfterViewInit {
       metrics: ['mse']
     });
 
-    // Training
-    await this.model.fit(featuresTensor, targetTensor, {
+    //Use simplified metrics for TensorFlow.js compatibility
+    await this.model.fitDataset(trainDataset, {
       epochs: numberEpochs,
-      validationSplit: 0.2,
+      validationData: valDataset,
       callbacks: tfvis.show.fitCallbacks(
         { name: 'Training Performance', tab: 'Training' },
         ['loss', 'mse', 'val_loss', 'val_mse'],
         { height: 300, callbacks: ['onEpochEnd'] }
       )
     });
+    
+    console.log('Training completed');
   }
 }
