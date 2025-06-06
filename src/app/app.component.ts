@@ -1,80 +1,30 @@
-import { Component, OnInit, Inject, PLATFORM_ID, AfterViewInit } from '@angular/core';
+import { Component, Inject, PLATFORM_ID, AfterViewInit } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
+import * as tf from '@tensorflow/tfjs';
+import * as tfvis from '@tensorflow/tfjs-vis';
 
-import * as tf from "@tensorflow/tfjs"
-import * as tfvis from "@tensorflow/tfjs-vis";
-
-const csvurl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ68uL8xVQ8djBJaEVIPO4wn4jBQ9ty1Lu5iTutUrvN4G_Qub__j3L0SVEp23Lu9g/pub?gid=1585054194&single=true&output=csv";
+const csvurl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRm-d5gwpY6E-NYgp95ycNmQzPvQ8fAh5MgOI7Tn_Podim_OVBjn168oWAEQVSq2w/pub?gid=971307772&single=true&output=csv";
 
 @Component({
   selector: 'app-root',
-  imports: [],
   templateUrl: './app.component.html',
-  styleUrl: './app.component.scss'
+  styleUrls: ['./app.component.scss']
 })
-export class AppComponent implements OnInit, AfterViewInit {
-  title = 'Predict-Temperature';
+export class AppComponent implements AfterViewInit {
   dataset: any;
   isBrowser: boolean;
+  model= tf.sequential();
 
   constructor(@Inject(PLATFORM_ID) private platformId: Object) {
     this.isBrowser = isPlatformBrowser(platformId);
   }
 
-  ngOnInit(): void {
-    this.loadData();
-  }
-
-  ngAfterViewInit(): void {
+  ngAfterViewInit() {
     if (this.isBrowser) {
+      this.loadData();
       this.visualizeDataset();
       this.linearregression();
     }
-  }
-
-  model= tf.sequential();
-
-  async linearregression() {
-    const numberEpochs = 100;
-    const numOfFeatures= (await this.dataset.columnNames()).length - 1;
-    const features:any= [];
-    const target:any= [];
-    const number_of_samples = 100;
-    let counter = 0;
-
-    await this.dataset.forEachAsync((e: any) => {
-      if (Math.random() > 0.5 && counter < number_of_samples) {
-        features.push(Object.values(e.xs));
-        target.push(e.ys.Apparent_Temperature);
-        counter++;
-      }
-    });
-
-    const features_tensor_raw = tf.tensor2d(features, [features.length, numOfFeatures]);
-    const target_tensor = tf.tensor2d(target, [target.length, 1]);
-
-    this.model.add(tf.layers.dense({ inputShape: [1], units: 1 }));
-    this.model.compile({ optimizer: 'sgd', loss: 'meanAbsoluteError' });
-
-    const trainingplot:any= document.getElementById("training");
-
-    // Actually training the model
-    await this.model.fit(features_tensor_raw, target_tensor, {
-      // batchSize: 10,
-      epochs: numberEpochs,
-      validationSplit: 0.2,
-      callbacks: [
-        tfvis.show.fitCallbacks(trainingplot, ['loss','acc', 'val_loss', 'val_acc'], {
-          callbacks: ['onEpochEnd'],
-        }),
-        {
-          onEpochEnd: async (epoch: number, logs: any) => {},
-        },
-        {
-          onTrainEnd: async (logs: any) => {}
-        }
-      ]
-    });
   }
 
   async loadData() {
@@ -88,33 +38,74 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   async visualizeDataset() {
-    if (!this.dataset) {
-      console.error("Dataset is not loaded yet.");
-      return;
-    }
+    const shuffledDataset = this.dataset.shuffle(1000);
+    const sampledDataset = await shuffledDataset.take(100).toArray();
+    const dataset: any[] = [];
+    const humidityDataset: any[] = [];
 
-    const datasetplot:any = document.getElementById("datasetplotting");
-    const dataset:any= [];
-    const number_of_samples = 100;
-    let counter = 0;
-    
-    await this.dataset.forEachAsync((e: any) => {
-      const features = { x: e.xs.Temperature, y: e.ys.Apparent_Temperature };
-      if (Math.random() > 0.5 && counter < number_of_samples) {
-        dataset.push(features);
-        counter++;
-      }
+    sampledDataset.forEach((e:any) => {
+      dataset.push({ x: e.xs.Temperature, y: e.ys.Apparent_Temperature });
+      humidityDataset.push({ x: e.xs.Humidity, y: e.ys.Apparent_Temperature });
     });
 
     tfvis.render.scatterplot(
-      datasetplot,
-      { values: dataset, series: ['Full Dataset'] },
-      {
-        xLabel: 'Temperature (C)',
-        yLabel: 'Apparent Temperature (C)',
-        // height: 300,
-        // width: 420
-      }
+      { name: 'Temperature vs Apparent Temperature', tab: 'Charts' }, 
+      { values: dataset }, 
+      { xLabel: 'Temperature (C)', yLabel: 'Apparent Temperature (C)' }
     );
+
+    tfvis.render.scatterplot(
+      { name: 'Humidity vs Apparent Temperature', tab: 'Charts' },
+      { values: humidityDataset },
+      { xLabel: 'Humidity (%)', yLabel: 'Apparent Temperature (C)' }
+    );
+  }
+
+  async linearregression() {
+    const numberEpochs = 100;
+    const columnNames = await this.dataset.columnNames();
+    const featureColumns = columnNames.filter((name:any) => 
+      name !== 'Apparent_Temperature' && name !== 'Humidity'
+    );
+    featureColumns.push('Humidity'); 
+    const numOfFeatures = featureColumns.length;
+    
+    const shuffledDataset = this.dataset.shuffle(1000);
+    const sampledDataset = await shuffledDataset.take(100).toArray();
+    
+    const features: number[][] = [];
+    const target: number[] = [];
+    
+    sampledDataset.forEach((e:any) => {
+      const row = featureColumns.map((col:any) => e.xs[col]);
+      features.push(row);
+      target.push(e.ys.Apparent_Temperature);
+    });
+
+    const featuresTensor = tf.tensor2d(features, [features.length, numOfFeatures]);
+    const targetTensor = tf.tensor2d(target, [target.length, 1]);
+
+    this.model = tf.sequential();
+    this.model.add(tf.layers.dense({
+      inputShape: [numOfFeatures],
+      units: 1
+    }));
+    
+    this.model.compile({
+      optimizer: tf.train.adam(0.1),
+      loss: 'meanSquaredError',
+      metrics: ['mse']
+    });
+
+    // Training
+    await this.model.fit(featuresTensor, targetTensor, {
+      epochs: numberEpochs,
+      validationSplit: 0.2,
+      callbacks: tfvis.show.fitCallbacks(
+        { name: 'Training Performance', tab: 'Training' },
+        ['loss', 'mse', 'val_loss', 'val_mse'],
+        { height: 300, callbacks: ['onEpochEnd'] }
+      )
+    });
   }
 }
