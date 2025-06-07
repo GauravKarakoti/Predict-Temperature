@@ -21,7 +21,7 @@ export class AppComponent implements AfterViewInit {
     this.isBrowser = isPlatformBrowser(platformId);
   }
 
-  ngAfterViewInit() {
+  ngAfterViewInit(){
     if (this.isBrowser) {
         this.loadData();
         this.visualizeDataset();
@@ -77,11 +77,6 @@ export class AppComponent implements AfterViewInit {
   }
 
   async linearRegression() {
-    if (this.dataArray.length === 0) {
-      console.log("No data available for training");
-      return;
-    }
-    
     const numberEpochs = 100;
     const batchSize = 32;
     
@@ -126,5 +121,51 @@ export class AppComponent implements AfterViewInit {
     });
     
     console.log('Training completed');
+
+    await this.visualizePredictions(valData, splitIndex);
+  }
+
+  private async visualizePredictions(valData: any[], splitIndex: number) {
+    const valFeatures = valData.map(d => d.xs);
+    const valTensor = tf.tensor2d(valFeatures);
+    
+    const predictions = this.model.predict(valTensor) as tf.Tensor;
+    const predictionsArray:any = await predictions.array();
+    
+    const valOriginalData = this.dataArray.slice(splitIndex);
+    
+    const actualPoints = [];
+    const predictedPoints = [];
+    
+    for (let i = 0; i < valOriginalData.length; i++) {
+      const sample = valOriginalData[i];
+      
+      actualPoints.push({
+        x: sample.xs.Temperature,
+        y: sample.ys[this.labelColumn]
+      });
+      
+      predictedPoints.push({
+        x: sample.xs.Temperature,
+        y: predictionsArray[i][0]
+      });
+    }
+    
+    tfvis.render.scatterplot(
+      { name: 'Actual vs Predicted Apparent Temperature', tab: 'Predictions' },
+      {
+        values: [actualPoints, predictedPoints],
+        series: ['Actual', 'Predicted']
+      },
+      {
+        xLabel: 'Temperature (°C)',
+        yLabel: 'Apparent Temperature (°C)',
+        height: 400,
+        seriesColors: ['blue', 'red']
+      }
+    );
+    
+    valTensor.dispose();
+    predictions.dispose();
   }
 }
