@@ -120,7 +120,7 @@ export class AppComponent implements AfterViewInit {
       validationData: valDataset,
       callbacks: tfvis.show.fitCallbacks(
         { name: 'Training Performance', tab: 'Training' },
-        ['loss', 'mse', 'val_loss', 'val_mse'],
+        ['loss', 'val_loss'],
         { height: 300, callbacks: ['onEpochEnd'] }
       )
     });
